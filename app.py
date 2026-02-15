@@ -1,19 +1,42 @@
-from flask import Flask, request, render_template
+from flask import Flask, request, render_template, session
 import joblib
 import numpy as np
 import uuid
 from datetime import datetime
 import random
 
-app = Flask(__name__)
+embedding_model = None
 
-# -------- Load Models --------
+def get_embedding_model():
+    global embedding_model
+
+    if embedding_model is None:
+        from sentence_transformers import SentenceTransformer
+        print("Loading MiniLM model...")
+        embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    return embedding_model
+
+
+app = Flask(__name__)
+app.secret_key = "supersecretkey"
+
+# Load models
 behavior_model = joblib.load("behavior_model.pkl")
 text_model = joblib.load("text_model.pkl")
-embedding_model = joblib.load("embedding_model.pkl")
+# embedding_model = joblib.load("embedding_model.pkl")
+
+#
+FEATURE_NAMES = [
+    "order_velocity",
+    "device_changes_7d",
+    "ip_changes_7d",
+    "unpaid_ratio",
+    "risky_category_flag"
+]
 
 
-# -------- Annotation Normalization --------
+# -------- Normalize Annotation --------
 def normalize_annotation(text):
     replacements = {
         "order vel": "high order velocity observed",
@@ -25,69 +48,48 @@ def normalize_annotation(text):
     }
 
     text = text.lower()
-
     for k, v in replacements.items():
         text = text.replace(k, v)
 
     return text
 
 
-# -------- Explanation Generator --------
-def generate_explanation(behavior_score, text_score, final_score, threshold):
-
-    explanation = []
-
-    if behavior_score > 0.6:
-        explanation.append("Behavioral metrics indicate elevated risk.")
-    else:
-        explanation.append("Behavioral signals appear moderate or low.")
-
-    if text_score > 0.6:
-        explanation.append("Annotation reasoning aligns strongly with fraud indicators.")
-    else:
-        explanation.append("Annotation reasoning is limited or lacks strong contextual evidence.")
-
-    if final_score > threshold:
-        explanation.append("Overall confidence exceeds approval threshold.")
-    else:
-        explanation.append("Overall confidence does not meet approval threshold.")
-
-    return " ".join(explanation)
-
-
-# -------- Random Case Generator --------
+# -------- Random Case --------
 def generate_random_case():
-
-    order_velocity = round(random.uniform(2, 12), 2)
-    device_changes = random.randint(0, 4)
-    ip_changes = random.randint(0, 3)
-    unpaid_ratio = round(random.uniform(0.0, 0.8), 2)
-    risky_flag = random.choice([0, 1])
-
-    annotation_templates = [
-        "order vel; card vel; multiple device changes observed.",
-        "ip chg detected with elevated order velocity.",
-        "high unpaid ratio with risky category purchases.",
-        "order vel spike; dev chg; possible coordinated misuse.",
-        "moderate activity increase but no strong cluster linkage.",
-        "card vel; ip chg; prior suspicious activity noted."
-    ]
-
-    annotation = random.choice(annotation_templates)
-
     return {
-        "order_velocity": order_velocity,
-        "device_changes": device_changes,
-        "ip_changes": ip_changes,
-        "unpaid_ratio": unpaid_ratio,
-        "risky_flag": risky_flag,
-        "annotation": annotation
+        "order_velocity": round(random.uniform(2, 12), 2),
+        "device_changes": random.randint(0, 4),
+        "ip_changes": random.randint(0, 3),
+        "unpaid_ratio": round(random.uniform(0.0, 0.8), 2),
+        "risky_flag": random.choice([0, 1]),
+        "annotation": random.choice([
+            "order vel; card vel; multiple device changes observed.",
+            "ip chg detected with elevated order velocity.",
+            "high unpaid ratio with risky category purchases.",
+            "order vel spike; dev chg; possible coordinated misuse.",
+            "moderate activity increase but no strong cluster linkage.",
+            "card vel; ip chg; prior suspicious activity noted."
+        ])
     }
+
+
+# -------- Feature Importance --------
+def get_feature_importance():
+    importances = behavior_model.feature_importances_
+    sorted_idx = np.argsort(importances)[::-1]
+
+    return [
+        (FEATURE_NAMES[i], float(round(float(importances[i]), 3)))
+        for i in sorted_idx
+    ]
 
 
 # -------- Main Route --------
 @app.route("/", methods=["GET", "POST"])
 def home():
+
+    if "case_history" not in session:
+        session["case_history"] = []
 
     if request.method == "POST":
 
@@ -102,10 +104,9 @@ def home():
         threshold = float(request.form["threshold"])
         annotation = request.form["annotation"]
 
-        # Normalize annotation
         clean_annotation = normalize_annotation(annotation)
 
-        # Behavioral prediction
+        # Behavioral Prediction
         X_behavior = np.array([[
             order_velocity,
             device_changes,
@@ -116,24 +117,27 @@ def home():
 
         behavior_score = behavior_model.predict_proba(X_behavior)[0][1]
 
-        # Text prediction
-        embedding = embedding_model.encode([clean_annotation])
+        # Text Prediction
+        model = get_embedding_model()
+        embedding = model.encode([clean_annotation])
         text_score = text_model.predict_proba(embedding)[0][1]
 
-        # Weighted final score
         final_score = 0.3 * behavior_score + 0.7 * text_score
-
         decision = "APPROVE" if final_score > threshold else "REJECT"
 
-        explanation = generate_explanation(
-            behavior_score,
-            text_score,
-            final_score,
-            threshold
-        )
+        # Store in session history
+        session["case_history"].append({
+            "id": str(request_id),
+            "score": float(round(float(final_score), 3)),
+            "decision": str(decision)
+        })
 
-        # Prepare next random case after evaluation
-        next_case = generate_random_case()
+        session.modified = True
+
+        # Auto approval rate
+        total_cases = len(session["case_history"])
+        approved_cases = sum(1 for c in session["case_history"] if c["decision"] == "APPROVE")
+        approval_rate = round((approved_cases / total_cases) * 100, 2)
 
         return render_template(
             "index.html",
@@ -142,21 +146,22 @@ def home():
             final_score=round(final_score, 3),
             decision=decision,
             threshold=threshold,
-            explanation=explanation,
             request_id=request_id,
             timestamp=timestamp,
-            case_data=next_case
+            feature_importance=get_feature_importance(),
+            case_history=session["case_history"],
+            approval_rate=approval_rate,
+            case_data=generate_random_case()
         )
-
-    # On first load → show random case
-    random_case = generate_random_case()
 
     return render_template(
         "index.html",
         threshold=0.5,
-        case_data=random_case
+        case_data=generate_random_case(),
+        case_history=session["case_history"],
+        approval_rate=0
     )
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run()
