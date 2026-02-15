@@ -6,8 +6,6 @@ from datetime import datetime
 import random
 import os
 
-
-
 embedding_model = None
 
 def get_embedding_model():
