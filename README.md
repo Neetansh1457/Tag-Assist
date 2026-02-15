@@ -1,141 +1,240 @@
-# TagAssist: Tag Change Validation Prototype
-
-## Overview
-
-TagAssist is a prototype validation engine designed to assist investigators in reviewing tag change requests related to suspected fraud accounts.
-
-The system evaluates both structured behavioral signals and investigator annotations to generate a confidence-based recommendation for:
-
-- Auto-Approval  
-- Manual Review  
-
-This tool is intended as an operational assist system, not a fraud detection engine.
 
 ---
 
-## Problem Statement
+# 🚀 TagAssist
 
-In the current workflow:
+Hybrid ML Validation Engine for Fraud Tag Change Requests
 
-1. An investigator identifies potential fraud.
-2. A tag change request is raised.
-3. A specialized review team validates the request.
-4. Backlogs can accumulate.
-5. Manual review consumes operational bandwidth.
-
-Given that experienced investigators are correct approximately ~90% of the time, there is an opportunity to:
-
-- Validate high-confidence cases automatically
-- Reduce manual review load
-- Preserve review bandwidth for edge cases
-
-TagAssist explores a confidence-based assist mechanism for this queue.
+---
+![img.png](img.png "Demo-Screenshot")
 
 ---
 
-## System Design
+## 📌 Overview
 
-The prototype combines two independent signals:
+**TagAssist** is a hybrid behavioral + NLP validation engine designed to automatically validate fraud tag change requests in high-volume dispute queues.
 
-### 1. Behavioral Risk Signal (Structured Data)
+The system assists investigators by scoring pending tag requests using structured behavioral signals and semantic analysis of investigator annotations, then recommending automated approval for high-confidence cases.
 
-Features include:
-
-- Order velocity
-- Device changes (7 days)
-- IP changes (7 days)
-- Unpaid ratio
-- High-risk category flag
-
-These are modeled using XGBoost to estimate fraud-related behavioral risk.
+It is designed to reduce manual bottlenecks, stabilize SLA during fraud spikes, and preserve expert bandwidth.
 
 ---
 
-### 2. Investigator Reasoning Alignment (Text Signal)
+## 🧠 The Problem
 
-Investigator annotations are embedded using a sentence transformer model.
+In fraud-heavy dispute queues:
 
-The system evaluates semantic alignment with known fraud-related reasoning patterns.
+* Senior investigators raise tag change requests with historically high accuracy (~90%+).
+* These requests accumulate in a limited expert-review queue.
+* Even high-confidence cases require manual validation.
+* During fraud spikes, SLA pressure increases and backlogs compound.
 
-This allows the model to assess whether the written reasoning supports elevated fraud risk.
+The operational bottleneck is not accuracy — it is validation throughput.
 
----
-
-## Final Decision Logic
-
-Final Validation Confidence is computed as a weighted blend:
-
-Final Score = α * Behavioral Signal + (1 - α) * Text Signal
-
-A configurable threshold determines:
-
-- APPROVE (auto-validation eligible)
-- REJECT (manual review required)
+Every request is treated equally, regardless of confidence level.
 
 ---
 
-## Operational Framing
+## 🎯 Objective
 
-The system estimates:
+Build a system that:
 
-- Auto-Approval Rate
-- Manual Review Reduction (Session-level)
-- Confidence under configurable thresholds
+* Validates tag change requests automatically when confidence is high
+* Routes medium-confidence cases for manual review
+* Rejects low-confidence cases
+* Reduces review load without replacing human judgment
 
-This allows leadership to simulate policy sensitivity before operational rollout.
-
----
-
-## Key Characteristics
-
-- Binary validation prototype (Approve / Manual Review)
-- Lightweight Flask deployment
-- Session-level approval tracking
-- Leadership-ready UI framing
-- Modular architecture for future expansion
+The goal is not to eliminate review —
+it is to intelligently reduce unnecessary review.
 
 ---
 
-## What This Is Not
+## 🏗 System Architecture
 
-- Not a full fraud detection engine
-- Not trained on production data
-- Not a final policy enforcement system
+```
+Investigator Inputs
+  ├── Structured Features (velocity, IP changes, unpaid ratio, etc.)
+  └── Annotation Text
 
-This is a prototype to explore feasibility and operational impact.
+Structured Features → Behavioral Model (XGBoost)
+Annotation Text → MiniLM Embedding → Text Model
 
----
-
-## Future Enhancements
-
-- Threshold sensitivity analysis dashboard
-- Historical queue replay simulation
-- Human-error modeling
-- Feature attribution transparency (SHAP)
-- Production model retraining pipeline
-- Deployment with monitoring hooks
-
----
-
-## Deployment
-
-The application can be deployed via:
-
-- Render
-- Railway
-- Internal container platform
-
-Requires:
-
-- Python 3.11+
-- Flask
-- XGBoost
-- Sentence Transformers
-- scikit-learn
+           ↓
+     Hybrid Weighted Scoring
+           ↓
+     Threshold-Based Decision Engine
+           ↓
+Approve | Route | Reject
+```
 
 ---
 
-## Author
-Neetansh Shah
+## 🧩 Model Design
 
-Prototype designed and implemented to explore ML-assisted tag validation workflows in operational fraud environments.
+### Structured Behavioral Features
+
+* Order velocity
+* Device changes (7d)
+* IP changes (7d)
+* Unpaid order ratio
+* Risk category flag
+
+### Text Understanding
+
+* Sentence embeddings using `all-MiniLM-L6-v2`
+* Captures semantic meaning of annotations
+* Handles shorthand investigator language (e.g., "order vel; card vel")
+
+### Ensemble Strategy
+
+Final score =
+
+```
+0.3 × Behavioral Score + 0.7 × Text Score
+```
+
+Hybrid modeling improved robustness compared to structured-only approaches.
+
+---
+
+## 📊 Experimental Results
+
+On synthetic fraud-heavy validation data:
+
+* ROC-AUC: ~0.68–0.70 (Hybrid Model)
+* Demonstrated safe high-confidence filtering
+* Controlled threshold tuning enabled conservative auto-approval
+
+Even 8–15% safe auto-approval can:
+
+* Reduce manual review volume
+* Improve SLA stability during fraud spikes
+* Preserve expert reviewer bandwidth
+
+---
+
+## 📈 Operational Impact
+
+### Before
+
+* Every tag change request required manual validation
+* Queue congestion during fraud spikes
+* High-confidence cases delayed unnecessarily
+
+### After (with TagAssist)
+
+* High-confidence requests auto-approved
+* Medium-confidence routed to experts
+* Reduced bottleneck in expert validation queue
+* Improved operational stability
+
+---
+
+## 🖥 Live Demo
+
+🔗 [https://tagassist.dev](https://tagassist.dev)
+
+Features:
+
+* Adjustable threshold
+* Real-time fraud scoring
+* Behavioral + NLP confidence breakdown
+* Auto-approval tracking
+* Session-based case history
+
+---
+
+## ⚙ Deployment Architecture
+
+* Dockerized Flask application
+* Gunicorn WSGI server
+* Nginx reverse proxy
+* DigitalOcean Droplet (2GB RAM)
+* Let's Encrypt SSL (auto-renew)
+* Environment-based secret management
+
+Production hardened with:
+
+* CPU-only Torch build
+* Reverse proxy configuration
+* Secure session signing
+* Docker restart policy
+
+---
+
+## 🧠 Engineering Challenges Faced
+
+### Infrastructure
+
+* Transformer memory constraints on managed platforms
+* Worker timeouts during model loading
+* Docker image optimization
+* CPU-only PyTorch configuration
+
+### Networking
+
+* DNS propagation debugging
+* Nameserver misconfiguration
+* SSL validation failures (NXDOMAIN issues)
+* Reverse proxy routing setup
+
+### Deployment
+
+* Container lifecycle management
+* Secure secret key handling
+* Production environment configuration
+
+---
+
+## 📚 What I Learned
+
+This project reinforced:
+
+* Hybrid modeling strategies (structured + semantic)
+* How infrastructure affects ML reliability
+* Real-world deployment debugging
+* DNS, SSL, reverse proxy configuration
+* Production security best practices
+* SLA-aware ML system design
+
+It also highlighted that operational ML systems require as much infrastructure thinking as model thinking.
+
+---
+
+## ⚖ Ethical & Risk Considerations
+
+TagAssist is designed to **assist**, not replace, investigators.
+
+* Threshold tuning is conservative
+* High-confidence auto-approval only
+* Human review remains central for ambiguous cases
+* Designed to reduce noise, not override expertise
+
+---
+
+## 🚀 Future Improvements
+
+* SHAP-based explainability panel
+* Confidence calibration curves
+* Active learning feedback loop
+* Logging & monitoring dashboard
+* CI/CD auto-deployment pipeline
+* Model retraining workflow
+
+---
+
+## 📌 Why This Matters
+
+Operational ML is not about building the most complex model.
+
+It is about:
+
+* Reducing bottlenecks
+* Preserving expert bandwidth
+* Stabilizing SLA
+* Deploying systems reliably
+
+TagAssist demonstrates an end-to-end ML system built with operational awareness and production deployment discipline.
+
+---
+
