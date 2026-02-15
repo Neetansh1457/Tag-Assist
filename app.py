@@ -4,6 +4,9 @@ import numpy as np
 import uuid
 from datetime import datetime
 import random
+import os
+
+
 
 embedding_model = None
 
@@ -19,7 +22,7 @@ def get_embedding_model():
 
 
 app = Flask(__name__)
-app.secret_key = "supersecretkey"
+app.secret_key = os.getenv("SECRET_KEY", "fallback-dev-key")
 
 # Load models
 behavior_model = joblib.load("behavior_model.pkl")
