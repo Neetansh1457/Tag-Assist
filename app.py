@@ -6,28 +6,48 @@ from datetime import datetime
 import random
 import os
 
+# -----------------------------
+# Flask App Setup
+# -----------------------------
+app = Flask(__name__)
+app.secret_key = os.getenv("SECRET_KEY", "fallback-dev-key")
+
+# -----------------------------
+# Lazy Loaded Models (Trying to fix timeout issue on start)
+# -----------------------------
+behavior_model = None
+text_model = None
 embedding_model = None
+
+
+def get_behavior_model():
+    global behavior_model
+    if behavior_model is None:
+        print("Loading behavior model...")
+        behavior_model = joblib.load("behavior_model.pkl")
+    return behavior_model
+
+
+def get_text_model():
+    global text_model
+    if text_model is None:
+        print("Loading text model...")
+        text_model = joblib.load("text_model.pkl")
+    return text_model
+
 
 def get_embedding_model():
     global embedding_model
-
     if embedding_model is None:
         from sentence_transformers import SentenceTransformer
         print("Loading MiniLM model...")
         embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-
     return embedding_model
 
 
-app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "fallback-dev-key")
-
-# Load models
-behavior_model = joblib.load("behavior_model.pkl")
-text_model = joblib.load("text_model.pkl")
-# embedding_model = joblib.load("embedding_model.pkl")
-
-#
+# -----------------------------
+# Feature Names
+# -----------------------------
 FEATURE_NAMES = [
     "order_velocity",
     "device_changes_7d",
@@ -37,7 +57,9 @@ FEATURE_NAMES = [
 ]
 
 
-# -------- Normalize Annotation --------
+# -----------------------------
+# Normalize Annotation
+# -----------------------------
 def normalize_annotation(text):
     replacements = {
         "order vel": "high order velocity observed",
@@ -55,7 +77,9 @@ def normalize_annotation(text):
     return text
 
 
-# -------- Random Case --------
+# -----------------------------
+# Generate Random Case
+# -----------------------------
 def generate_random_case():
     return {
         "order_velocity": round(random.uniform(2, 12), 2),
@@ -74,9 +98,12 @@ def generate_random_case():
     }
 
 
-# -------- Feature Importance --------
+# -----------------------------
+# Feature Importance
+# -----------------------------
 def get_feature_importance():
-    importances = behavior_model.feature_importances_
+    model = get_behavior_model()
+    importances = model.feature_importances_
     sorted_idx = np.argsort(importances)[::-1]
 
     return [
@@ -85,7 +112,9 @@ def get_feature_importance():
     ]
 
 
-# -------- Main Route --------
+# -----------------------------
+# Main Route
+# -----------------------------
 @app.route("/", methods=["GET", "POST"])
 def home():
 
@@ -108,6 +137,7 @@ def home():
         clean_annotation = normalize_annotation(annotation)
 
         # Behavioral Prediction
+        behavior_model = get_behavior_model()
         X_behavior = np.array([[
             order_velocity,
             device_changes,
@@ -116,26 +146,29 @@ def home():
             risky_flag
         ]])
 
-        behavior_score = behavior_model.predict_proba(X_behavior)[0][1]
+        behavior_score = float(behavior_model.predict_proba(X_behavior)[0][1])
 
         # Text Prediction
-        model = get_embedding_model()
-        embedding = model.encode([clean_annotation])
-        text_score = text_model.predict_proba(embedding)[0][1]
+        embedding_model = get_embedding_model()
+        text_model = get_text_model()
 
-        final_score = 0.3 * behavior_score + 0.7 * text_score
+        embedding = embedding_model.encode([clean_annotation])
+        text_score = float(text_model.predict_proba(embedding)[0][1])
+
+        # Combined Score
+        final_score = float(0.3 * behavior_score + 0.7 * text_score)
         decision = "APPROVE" if final_score > threshold else "REJECT"
 
-        # Store in session history
+        # Store session history safely
         session["case_history"].append({
             "id": str(request_id),
-            "score": float(round(float(final_score), 3)),
-            "decision": str(decision)
+            "score": round(final_score, 3),
+            "decision": decision
         })
 
         session.modified = True
 
-        # Auto approval rate
+        # Calculate approval rate
         total_cases = len(session["case_history"])
         approved_cases = sum(1 for c in session["case_history"] if c["decision"] == "APPROVE")
         approval_rate = round((approved_cases / total_cases) * 100, 2)
